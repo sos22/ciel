@@ -139,12 +139,6 @@ class WorkerPool:
     which calls _reap_dead_workers() every ten seconds, after the pool
     has been running for thirty seconds.
 
-    We publish a couple of events on the bus:
-
-    -- schedule -- whenever anyone calls
-                   notify_job_about_current_workers???  As far as I
-                   can tell, nobody subscribes to that event, so it
-                   shouldn't matter too much.
     """
     def __init__(self, bus, deferred_worker, job_pool):
         """
@@ -160,7 +154,6 @@ class WorkerPool:
         """
         assert hasattr(bus, "subscribe")
         assert hasattr(bus, "unsubscribe")
-        assert hasattr(bus, "publish")
         assert hasattr(deferred_worker, "do_deferred_after")
         assert job_pool == None or hasattr(job_pool, "notify_worker_added")
         
@@ -263,7 +256,6 @@ class WorkerPool:
 #            ciel.log.error('%s has blocks, so will fetch' % str(worker), 'WORKER_POOL', logging.INFO)
 #            self.bus.publish('fetch_block_list', worker)
             
-        self.bus.publish('schedule')
         return id
     
     def shutdown(self):
