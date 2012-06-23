@@ -73,7 +73,7 @@ class Worker:
     Most of these are protected by the worker pool lock.
     """
     
-    def __init__(self, worker_id, worker_descriptor, feature_queues, worker_pool):
+    def __init__(self, worker_id, worker_descriptor, worker_pool):
         # Note that this is sometimes called holding the worker pool lock
         self.id = worker_id
         self.netloc = worker_descriptor['netloc']
@@ -280,7 +280,7 @@ class WorkerPool:
     def create_worker(self, worker_descriptor):
         with self._lock:
             id = self._allocate_worker_id()
-            worker = Worker(id, worker_descriptor, self.feature_queues, self)
+            worker = Worker(id, worker_descriptor, self)
             ciel.log.error('Worker registered: %s (%s)' % (worker.id, worker.netloc), 'WORKER_POOL', logging.WARNING, True)
             assert not self.workers.has_key(id)
             self.workers[id] = worker
