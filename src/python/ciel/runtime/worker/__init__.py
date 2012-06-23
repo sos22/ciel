@@ -85,7 +85,7 @@ class Worker(plugins.SimplePlugin):
         self.block_store.build_pin_set()
         self.block_store.check_local_blocks()
         create_watcher_thread(bus, self.block_store)
-        self.upload_deferred_work = DeferredWorkPlugin(bus, 'upload_work')
+        self.upload_deferred_work = DeferredWorkPlugin(bus)
         self.upload_deferred_work.subscribe()
         self.upload_manager = UploadManager(self.block_store, self.upload_deferred_work)
         self.execution_features = ExecutionFeatures()

@@ -13,29 +13,20 @@ class DeferredWorkPlugin(AsynchronousExecutePlugin):
     timers -- a dictionary mapping timer ids to Timers.
     current_timer_id -- next unused timer id.
     """
-    def __init__(self, bus, event_name="deferred_work"):
+    def __init__(self, bus):
         """
-        DeferredWorkPlugin(bus, event_name=\"deferred_work\")
+        DeferredWorkPlugin(bus)
 
         Create a new deferred work worker thread and attach it to the
-        bus @bus.  It will listen for new work items on @event_name
-        and, when they are received, run them immediately.  These work
-        items should be simple callables, and they will be invoked
-        with no arguments.  Work items can also be queued for
-        immediate execution using do_deferred().
-
-        Alternatively, work items can be enqueued using
-        do_deferred_after(), in which case they will only be invoked
-        after a timeout.
+        bus @bus.  Work items can be enqueued using either
+        do_deferred() (which runs them immediately) or
+        do_deferred_after() (which runs them after a timeout).  The
+        work items should be simple callables with no arguments.
 
         Note that there is only one worker thread, so slow items will
         prevent any other items from running.
-        
-        XXX -- as far as I can tell, nobody ever actually signals that
-        event; everything goes through do_deferred_after() and
-        do_deferred() instead.
         """
-        AsynchronousExecutePlugin.__init__(self, bus, 1, event_name)
+        AsynchronousExecutePlugin.__init__(self, bus, 1)
         self.timers = {}
         self.current_timer_id = 0
     
