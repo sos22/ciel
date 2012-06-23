@@ -177,6 +177,8 @@ class JobRoot:
     @cherrypy.expose
     def default(self, id, attribute=None):
         if cherrypy.request.method == 'POST' and attribute is None:
+            # XXX sos22 I don't think this will ever do anything useful.
+            
             ciel.log('Creating job for ID: %s' % id, 'JOB_POOL', logging.INFO)
             # Need to support this for backup masters, so that the job ID is
             # consistent.
@@ -187,6 +189,9 @@ class JobRoot:
                                                object_hook=json_decode_object_hook)
 
             # 2. Add to job pool (synchronously).
+            # XXX sos22 This is missing the mandatory job_options
+            # argument to create_job_for_task, which presumably means
+            # that this method isn't being used.
             job = self.job_pool.create_job_for_task(task_descriptor, job_id=id)
 
             # 2bis. Send to backup master.

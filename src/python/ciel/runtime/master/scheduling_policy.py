@@ -34,7 +34,7 @@ class RandomSchedulingPolicy(SchedulingPolicy):
         return [worker_pool.get_random_worker()]
     
 class WeightedRandomSchedulingPolicy(SchedulingPolicy):
-    
+    """Decoy class -- never actually used anywhere."""
     def __init__(self):
         pass
     

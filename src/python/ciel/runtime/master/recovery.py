@@ -27,7 +27,13 @@ import ciel
 import httplib2
 
 class TaskFailureInvestigator:
-    
+    """
+    Interesting fields:
+
+    worker_pool -- the WorkerPool object we're associated with
+    deferred_worker -- a DeferredWorkPlugin object we'll use for
+                       running deferred work items.
+    """
     def __init__(self, worker_pool, deferred_worker):
         self.worker_pool = worker_pool
         self.deferred_worker = deferred_worker
@@ -36,6 +42,7 @@ class TaskFailureInvestigator:
         self.deferred_worker.do_deferred(lambda: self._investigate_task_failure(task_id, failure_payload))
         
     def _investigate_task_failure(self, task, failure_payload):
+        # Called from the LazyTaskPoolAdapter
         (reason, detail, bindings) = failure_payload
         ciel.log('Investigating failure of task %s' % task.task_id, 'TASKFAIL', logging.WARN)
         ciel.log('Task failed because %s' % reason, 'TASKPOOL', logging.WARN)

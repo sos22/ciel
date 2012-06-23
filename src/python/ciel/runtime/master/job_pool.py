@@ -40,6 +40,8 @@ JOB_QUEUED = 3
 JOB_RECOVERED = 4
 JOB_CANCELLED = 5
 
+# XXX sos22 this is only ever used to initialise JOB_STATE_NAMES,
+# which seems a bit silly.
 JOB_STATES = {'CREATED': JOB_CREATED,
               'ACTIVE': JOB_ACTIVE,
               'COMPLETED': JOB_COMPLETED,
@@ -980,8 +982,7 @@ class JobPool(plugins.SimplePlugin):
         """
         # XXX sos22 surely we want some kind of synchronisation on
         # self.current_waiters?  Holding the job lock doesn't protect
-        # against concurrent waits for multiple jobs.  This matters
-        # for maintaining self.current_waiters.
+        # against concurrent waits for multiple jobs.
         with job._lock:
             ciel.log('Waiting for completion of job %s' % job.id, 'JOB_POOL', logging.INFO)
             while job.state not in (JOB_COMPLETED, JOB_FAILED):
