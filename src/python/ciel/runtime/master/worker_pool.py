@@ -24,31 +24,6 @@ import threading
 import uuid
 from urlparse import urlparse
 
-class FeatureQueues:
-    """
-    Decoy class -- instantiated but never actually used in any
-    meaningful sense.
-    """
-    def __init__(self):
-        self.queues = {}
-        self.streaming_queues = {}
-        
-    def get_queue_for_feature(self, feature):
-        try:
-            return self.queues[feature]
-        except KeyError:
-            queue = Queue()
-            self.queues[feature] = queue
-            return queue
-
-    def get_streaming_queue_for_feature(self, feature):
-        try:
-            return self.streaming_queues[feature]
-        except KeyError:
-            queue = Queue()
-            self.streaming_queues[feature] = queue
-            return queue
-
 class Worker:
     """
     A representation of a worker in the worker pool.  Interesting
@@ -158,8 +133,6 @@ class WorkerPool:
                 used, some of which will be idle, some of which will be
                 busy, and some of which will be failed.  Never actually
                 read.
-    feature_queues -- reference to a FeatureQueue object, but never
-                      actually used.
     event_count -- this is an integer which starts at 0 and gets
                    incremented whenever event_condvar is notified
                    Never actually read.
@@ -219,7 +192,6 @@ class WorkerPool:
         self.netlocs = {}
         self.idle_set = set()
         self._lock = threading.RLock()
-        self.feature_queues = FeatureQueues()
         self.event_count = 0
         self.event_condvar = threading.Condition(self._lock)
         self.max_concurrent_waiters = 5
@@ -266,7 +238,6 @@ class WorkerPool:
         self.workers = {}
         self.netlocs = {}
         self.idle_set = set()
-        self.feature_queues = FeatureQueues()
         
     def _allocate_worker_id(self):
         """
