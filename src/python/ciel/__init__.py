@@ -15,6 +15,12 @@ from ciel.logger import CielLogger
 import logging
 import ciel.runtime.stopwatch
 
+# Important exports:
+#
+# CIEL_VERSION_STRING -- a simple string describing the current version of Ciel
+# engine -- an alias for cherrypy.engine, or a stub if cherrypy is unavailable
+# log -- The main logger, either the cherrypy one or CielLogger
+
 CIEL_VERSION_STRING = 'Ciel version 0.1'
 
 try:
