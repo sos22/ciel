@@ -33,14 +33,6 @@ class RandomSchedulingPolicy(SchedulingPolicy):
     def select_workers_for_task(self, task, worker_pool):
         return [worker_pool.get_random_worker()]
     
-class WeightedRandomSchedulingPolicy(SchedulingPolicy):
-    """Decoy class -- never actually used anywhere."""
-    def __init__(self):
-        pass
-    
-    def select_workers_for_task(self, task, worker_pool):
-        return [worker_pool.get_random_worker_with_capacity_weight(task.scheduling_class)]
-    
 class TwoRandomChoiceSchedulingPolicy(SchedulingPolicy):
     
     def __init__(self):

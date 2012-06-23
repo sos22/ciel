@@ -25,10 +25,6 @@ class SWRealReference:
     def as_tuple(self):
         assert False
 
-    def as_protobuf(self):
-        """Decoy method -- never actually called"""
-        assert False
-    
     def is_consumable(self):
         return True
 
@@ -36,12 +32,8 @@ class SWRealReference:
         # XXX: Should really make id a field of RealReference.
         return SW2_FutureReference(self.id)
 
-def protobuf_to_netloc(netloc):
-    # Doesn't appear to be called anywhere
-    return '%s:%d' % (netloc.hostname, netloc.port)
-
 class SWErrorReference(SWRealReference):
-    """x
+    """
     References to the output of a task which failed.  This is either
     because the task itself failed, in which case reason ==
     \"RUNTIME_EXCEPTION\", or because the worker failed too many times
