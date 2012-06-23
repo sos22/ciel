@@ -446,6 +446,7 @@ class Job:
         self.job_pool.task_failure_investigator.investigate_task_failure(task, payload)
         
     def notify_worker_added(self, worker):
+        # Note that this can be called by the worker pool while holding the worker pool lock
         with self._lock:
             try:
                 _ = self.workers[worker] 
@@ -694,9 +695,53 @@ class JobTaskGraph(DynamicTaskGraph):
         self.reduce_graph_for_tasks([task])
 
 class JobPool(plugins.SimplePlugin):
+    """
+    Bits for managing the main job pool.  Interesting fields:
 
+    bus (from SimplePlugin) -- the cherrypy process bus we're attached to
+    journal_root -- options.journaldir
+    task_log -- a write-only file object pointing at ciel-task-log.txt
+    task_failure_investigator -- a TaskFailureInvestigator object.  Not actually
+                                 used by the JobPool, but Jobs inside the pool
+                                 will occasionally use it.
+    deferred_worker -- a DeferredWorkPlugin which we use for deferred work
+    worker_pool -- the main WorkerPool object.  We use this directly from here,
+                   and we also pass it to the scheduleing_policy's
+                   select_workers_for_task method.
+    jobs -- a mapping from job IDs to Job objects
+    run_queue -- a Queue containing all of the Job objects which we want to run.
+    num_running_jobs -- total number of jobs currently running.
+    max_running_jobs -- the constant 10
+    is_stopping -- either True or False, according to whether we're currently
+                   trying to stop.
+    current_waiters -- number of threads currently stuck in wait_for_completion.
+                       Updated from multiple threads without any synchronisation,
+                       which is kind of interesting.
+    max_concurrent_waiters -- the constant 10
+    _lock -- non-reentrant lock for protecting our interesting fields.
+
+    And some odd ones:
+    
+    current_running_job -- always None
+    scheduler -- always None
+    task_log_root -- options.task_log_root.  Only actually used from __init__
+
+    XXX not sure why this derives from SimplePlugin, given that we
+    have our own subscribe and unsubscribe methods and those are the
+    only ones exposed by SimplePlugin.
+
+    The only event we subscribe to on the bus is \"stop\", so that we
+    can stop the job pool when the server stops.
+    """
     def __init__(self, bus, journal_root, scheduler, task_failure_investigator, deferred_worker, worker_pool, task_log_root=None):
+        # scheduler is always None here.
         plugins.SimplePlugin.__init__(self, bus)
+        
+        assert hasattr(bus, "subscribe")
+        assert hasattr(bus, "unsubscribe")
+        assert hasattr(task_failure_investigator, "investigate_task_failure")
+        assert hasattr(worker_pool, "execute_task_on_worker")
+        assert hasattr(worker_pool, "get_worker_at_netloc")
         self.journal_root = journal_root
 
         self.task_log_root = task_log_root
@@ -743,10 +788,29 @@ class JobPool(plugins.SimplePlugin):
         self.bus.unsubscribe("stop", self.server_stopping)
         
     def start_all_jobs(self):
+        """
+        Go through all the jobs in self.jobs and add them to the queue.
+        Assumes that the queue is currently empty.
+        """
+        assert self.run_queue.empty()
         for job in self.jobs.values():
             self.queue_job(job)
         
     def log(self, task, state, details=None):
+        """
+        log(task, state, details=None)
+
+        task should be either a Task or None.  Add an entry to the
+        main task log, if we have one.  The entry includes the task id
+        (or None, if no task is specified), the state, and the
+        details.
+
+        task = None is pretty much only used with state =
+        \"STOPPING\", when the server is shutting down, which will be
+        the last entry in the log.
+
+        This is only called from JobPool and Job, both in this file.
+        """
         if self.task_log is not None:
             log_at = datetime.datetime.now()
             log_float = time.mktime(log_at.timetuple()) + log_at.microsecond / 1e6
@@ -755,7 +819,9 @@ class JobPool(plugins.SimplePlugin):
 
     def server_stopping(self):
         # When the server is shutting down, we need to notify all threads
-        # waiting on job completion.
+        # waiting on job completion.  Need to make sure that nobody
+        # uses the task log after this.
+        assert not self.is_stopping
         self.is_stopping = True
         for job in self.jobs.values():
             with job._lock:
@@ -774,6 +840,12 @@ class JobPool(plugins.SimplePlugin):
         return str(uuid.uuid1())
     
     def add_job(self, job, sync_journal=False):
+        """
+        add a given Job argument to the job pool.  Tells the job's
+        task graph to spawn its root task.  Takes an additional
+        argument, sync_journal, which is ignored.
+        """
+        assert not self.jobs.has_key(job.id)
         self.jobs[job.id] = job
         
         # We will use this both for new jobs and on recovery.
@@ -781,22 +853,39 @@ class JobPool(plugins.SimplePlugin):
             job.task_graph.spawn(job.root_task)
     
     def notify_worker_added(self, worker):
+        """Called by WorkerPool whenever a new worker is created, or
+        when notify_job_about_current_workers() is called."""
         for job in self.jobs.values():
             if job.state == JOB_ACTIVE:
                 job.notify_worker_added(worker)
             
     def notify_worker_failed(self, worker):
+        """
+        Called by WorkerPool whenever a worker fails out of the pool.
+        Walks the list of jobs and calls the notify_worker_failed
+        method for each of them.
+        """
         for job in self.jobs.values():
             if job.state == JOB_ACTIVE:
                 job.notify_worker_failed(worker)
                 
     def add_failed_job(self, job_id):
+        # Invoked by RecoveryManager whenever something goes wrong
+        # trying to recover a job.  The job is doomed, but we can at
+        # least try to tell the user that it used to exist.
         # XXX: We lose job options... should probably persist these in the journal.
+        assert not self.jobs.has_key(job_id)
         job = Job(job_id, None, None, JOB_FAILED, self, {})
         self.jobs[job_id] = job
     
     def create_job_for_task(self, task_descriptor, job_options, job_id=None):
-        
+        """
+        Convert a task descriptor into a job.  Allocates a new job id,
+        creates a Job, and entrains it to the JobPool.
+
+        This is always called with job_id = None; not sure why there's
+        even an argument for it.
+        """
         with self._lock:
         
             if job_id is None:
@@ -833,6 +922,11 @@ class JobPool(plugins.SimplePlugin):
             return None
 
     def maybe_start_new_job(self):
+        """
+        Called whenever a job is created or finished.  Looks at the
+        state of the pool and decides whether we want to start any
+        more jobs right now.
+        """
         with self._lock:
             if self.num_running_jobs < self.max_running_jobs:
                 try:
@@ -845,6 +939,13 @@ class JobPool(plugins.SimplePlugin):
                 ciel.log('Not starting a new job because there is insufficient capacity', 'JOB_POOL', logging.INFO)
                 
     def queue_job(self, job):
+        """
+        Adds a new job to the job queue.  Note that this *does not*
+        add it to the jobs mapping, which should already have been
+        done by add_job.
+        """
+        assert hasattr(job, "activated")
+        assert self.jobs.get(job.id) == job
         self.run_queue.put(job)
         job.enqueued()
         self.maybe_start_new_job()
@@ -859,6 +960,28 @@ class JobPool(plugins.SimplePlugin):
         job.activated()
 
     def wait_for_completion(self, job, timeout=None):
+        """
+        Wait for a given Job object to do something.  If timeout is
+        None then we wait until it finishes (for as long as
+        necessary).  If timeout is non-None then we instead wait until
+        its condition variable is fired.  We also wake up if the
+        server is shutting down.
+
+        Return values:
+
+        timeout == None:
+          Exception -- server is stopping or max_concurrent_waiters was
+                       exceeded
+          The job we were passed in -- if it finishes before the server stops.
+
+        timeout != None:
+          True -- the job is in either COMPLETED or FAILED
+          False -- the job is in some other state
+        """
+        # XXX sos22 surely we want some kind of synchronisation on
+        # self.current_waiters?  Holding the job lock doesn't protect
+        # against concurrent waits for multiple jobs.  This matters
+        # for maintaining self.current_waiters.
         with job._lock:
             ciel.log('Waiting for completion of job %s' % job.id, 'JOB_POOL', logging.INFO)
             while job.state not in (JOB_COMPLETED, JOB_FAILED):
