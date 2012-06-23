@@ -126,27 +126,6 @@ class WorkerPool:
                                          workers in the given
                                          scheduling class.
 
-    There are a couple of slightly odd ones as well:
-
-    idle_worker_queue -- a Queue().  Never actually used.
-    idle_set -- a set containing all of the worker IDs which we've ever
-                used, some of which will be idle, some of which will be
-                busy, and some of which will be failed.  Never actually
-                read.
-    event_count -- this is an integer which starts at 0 and gets
-                   incremented whenever event_condvar is notified
-                   Never actually read.
-    event_condvar -- a condvar which gets notified under the following
-                     conditions:
-                     -- a new worker is created (or an old worker returns
-                        from the dead)
-                     -- we receive a ping via worker_ping()
-                     -- the server is shutting down
-                     Protected by the _lock.
-                     Never actually waited on.
-    max_concurrent_waiters -- appears to be the constant 5?
-    current_waiters -- appears to be the constant 0?
-    
     Scheduling classes are almost opaque from the point of view of
     this class.  We just keep track of how many things of each class
     each worker thinks it can run.  There are two exceptions:
@@ -163,8 +142,9 @@ class WorkerPool:
     We publish a couple of events on the bus:
 
     -- schedule -- whenever anyone calls
-                   notify_job_about_current_workers???
-    
+                   notify_job_about_current_workers???  As far as I
+                   can tell, nobody subscribes to that event, so it
+                   shouldn't matter too much.
     """
     def __init__(self, bus, deferred_worker, job_pool):
         """
@@ -187,15 +167,9 @@ class WorkerPool:
         self.bus = bus
         self.deferred_worker = deferred_worker
         self.job_pool = job_pool
-        self.idle_worker_queue = Queue()
         self.workers = {}
         self.netlocs = {}
-        self.idle_set = set()
         self._lock = threading.RLock()
-        self.event_count = 0
-        self.event_condvar = threading.Condition(self._lock)
-        self.max_concurrent_waiters = 5
-        self.current_waiters = 0
         self.is_stopping = False
         self.scheduling_class_capacities = {'*' : []}
         self.scheduling_class_total_capacities = {'*' : 0}
@@ -234,10 +208,8 @@ class WorkerPool:
         # XXX sos22 this leaves scheduling_class_capacities and
         # scheduling_class_total_capacities in a state which is
         # inconsistent with workers and netlocs!
-        self.idle_worker_queue = Queue()
         self.workers = {}
         self.netlocs = {}
-        self.idle_set = set()
         
     def _allocate_worker_id(self):
         """
@@ -260,9 +232,6 @@ class WorkerPool:
                 ciel.log.error('Worker at netloc %s has reappeared' % worker.netloc, 'WORKER_POOL', logging.WARNING)
                 self.worker_failed(previous_worker_at_netloc)
             self.netlocs[worker.netloc] = worker
-            self.idle_set.add(id)
-            self.event_count += 1
-            self.event_condvar.notify_all()
             
             for scheduling_class, capacity in worker.scheduling_classes.items():
                 try:
@@ -386,16 +355,12 @@ class WorkerPool:
 
     def worker_ping(self, worker):
         """Record that a worker just received a ping."""
-        with self._lock:
-            self.event_count += 1
-            self.event_condvar.notify_all()
         worker.last_ping = datetime.datetime.now()
 
     def server_stopping(self):
         """The main process bus is shutting down.  Tell our listeners."""
         with self._lock:
             self.is_stopping = True
-            self.event_condvar.notify_all()
 
     def _investigate_worker_failure(self, worker):
         """
