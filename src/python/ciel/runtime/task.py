@@ -249,29 +249,6 @@ class TaskPoolTask:
         except KeyError:
             self._blocking_dict[global_id] = set([local_id])
             
-    def notify_reference_changed(self, global_id, ref, task_pool):
-        # XXX SOS22 this doesn't appear to ever get called.
-        if global_id in self.unfinished_input_streams:
-            self.unfinished_input_streams.remove(global_id)
-            task_pool.unsubscribe_task_from_ref(self, ref)
-            self.inputs[ref.id] = ref
-            if len(self.unfinished_input_streams) == 0:
-                if self.state == TASK_QUEUED_STREAMING:
-                    self.set_state(TASK_QUEUED)
-        else:
-            if self.state == TASK_BLOCKING:
-                local_ids = self._blocking_dict.pop(global_id)
-                for local_id in local_ids:
-                    self.inputs[local_id] = ref
-                if isinstance(ref, SW2_StreamReference):
-                    # Stay subscribed; this ref is still interesting
-                    self.unfinished_input_streams.add(global_id)
-                else:
-                    # Don't need to hear about this again
-                    task_pool.unsubscribe_task_from_ref(self, ref)
-                if len(self._blocking_dict) == 0:
-                    self.set_state(TASK_RUNNABLE)
-
     def notify_ref_table_updated(self, ref_table_entry):
         # Called by the task graph when a new input reference becomes
         # consumable or when <something> happens to a streamable
