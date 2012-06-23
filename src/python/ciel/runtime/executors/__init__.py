@@ -16,7 +16,7 @@ from __future__ import with_statement
 
 from ciel.public.references import \
     SWRealReference, SW2_FutureReference, SWDataValue, \
-    SWErrorReference, SW2_SweetheartReference,\
+    SW2_SweetheartReference,\
     SW2_FixedReference, SWReferenceJSONEncoder, SW2_ConcreteReference,\
     decode_datavalue_string, encode_datavalue, SW2_TombstoneReference
 from ciel.public.io_helpers import read_framed_json, write_framed_json

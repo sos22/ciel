@@ -136,6 +136,7 @@ class ProcExecutor(BaseExecutor):
             if self.process_record is None:
                 self.process_record = self.process_pool.create_process_record(None, "json")
                 if "command" in task_private:
+                    # XXX sos22 How is SWRealReference in scope here?
                     if isinstance(task_private["command"], SWRealReference):
                         # Command has been passed in as a reference.
                         command = [retrieve_filename_for_ref(arg, self.task_record, False)]

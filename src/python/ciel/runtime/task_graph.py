@@ -12,20 +12,36 @@
 # ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 from ciel.public.references import SW2_FutureReference, combine_references,\
-    SW2_StreamReference
+    SW2_StreamReference, SWRealReference
 from ciel.runtime.task import TASK_CREATED, TASK_BLOCKING, TASK_COMMITTED,\
     TASK_RUNNABLE
 import collections
 
 class ReferenceTableEntry:
-    """Represents information stored about a reference in the task graph."""
+    """
+    Represents information stored about a reference in the task graph.
+
+    Interesting fields:
+
+    ref -- The reference we're looking at (which should extend SWRealReference)
+    producing_task -- the task which we expect to eventually produce this
+                      reference, or None if we don't have one yet
+    consumers -- either None or a set of tasks which are going to consume
+                 this reference once its available (which might mean finished
+                 or normal references or started for streaming ones).
+                 
+    XXX SOS22 Not sure why consumers is sometimes None, rather than
+    just using an empty set?
+    """
     
-    def __init__(self, ref, producing_task=None): 
+    def __init__(self, ref, producing_task=None):
+        assert isinstance(ref, SWRealReference)
         self.ref = ref
         self.producing_task = producing_task
         self.consumers = None
 
     def update_producing_task(self, task):
+        # XXX SOS22 what if producing_task has already been set?
         self.producing_task = task
 
     def combine_references(self, other_ref):
@@ -39,17 +55,31 @@ class ReferenceTableEntry:
         task must implement the notify_ref_table_updated(self, ref_table_entry)
         method.
         """
+        assert hasattr(task, "is_queued_streaming")
+        assert hasattr(task, "is_blocked")
+        assert hasattr(task, "notify_ref_table_updated")
         if self.consumers is None:
             self.consumers = set([task])
         else:
             self.consumers.add(task)
 
     def remove_consumer(self, task):
+        # XXX SOS22 surely it's a bad thing if you try to remove a
+        # consumer which isn't registered?
         if self.consumers is not None:
             self.consumers.remove(task)
 
 class TaskGraphUpdate:
-    
+    """
+    A batch of updates to a task graph.
+
+    Interesting fields:
+
+    spawns -- a list of tasks which we intend to spawn
+    publishes -- a list of (reference, producing_task) pairs which we
+                 intend to publish
+    reduce_list -- a list of tasks which are to be reduced.
+    """
     def __init__(self):
         self.spawns = []
         self.publishes = []
@@ -71,7 +101,19 @@ class TaskGraphUpdate:
         graph.reduce_graph_for_tasks(self.reduce_list)
 
 class DynamicTaskGraph:
-    
+    """
+    A dynamic task graph.
+
+    Interesting fields:
+
+    tasks -- mapping from task IDs to task objects.  Not actually used
+             from here, but we maintain it for the benefit of lots
+             of other places.
+    references -- mapping from reference IDs to ReferenceTableEntry instances.
+
+    Not useful by itself.  Has to be extended by a class which
+    provides a task_runnable() method.
+    """
     def __init__(self):
         
         # Mapping from task ID to task object.
@@ -81,13 +123,17 @@ class DynamicTaskGraph:
         self.references = {}
         
     def spawn(self, task, tx=None):
-        """Add a new task to the graph. If tx is None, this will cause an immediate
-        reduction; otherwise, tasks-to-reduce will be added to tx.result_list."""
+        """Add a new task to the graph. If tx is None and the task
+        produces an output for which we have a consumer this will
+        cause an immediate reduction; otherwise, task will be added to
+        tx.result_list.  If the task is already present in the graph
+        then this is a no-op."""
         
         # Record the task in the task table, if we don't already know about it.
         if task.task_id in self.tasks:
             return
         self.tasks[task.task_id] = task
+        # XXX SOS22 this seems like a strange place to do this from.
         if task.parent is not None:
             task.parent.children.append(task)
         
@@ -105,15 +151,27 @@ class DynamicTaskGraph:
                 self.reduce_graph_for_tasks([task])
     
     def publish(self, reference, producing_task=None):
-        """Updates the information held about a reference. Returns the updated
-        reference table entry for the reference."""
+        """
+        Enter or update a reference in the reference table.  Returns
+        the ReferenceTableEntry.  If the reference is already present
+        in the table then we:
+
+        -- Set the producing_task, if it's currently unknown.
+        -- Merge any useful information in the new reference into the
+           table entry (e.g. location hints)
+        -- Tell any consumers of the reference that something
+           interesting has happened (by passing them
+           to task_runnable)
+        """
         try:
             
             ref_table_entry = self.get_reference_info(reference.id)
             if producing_task is not None:
                 ref_table_entry.update_producing_task(producing_task)
             ref_table_entry.combine_references(reference)
-            
+
+            # XXX SOS22 might make sense to only do this if ref is
+            # actually consumable?
             if ref_table_entry.has_consumers():
                 consumers_copy = ref_table_entry.consumers.copy()
                 for task in consumers_copy:
@@ -126,9 +184,13 @@ class DynamicTaskGraph:
     
     def subscribe(self, id, consumer):
         """
-        Adds a consumer for the given ID. Typically, this is used to monitor
-        job completion (by adding a synthetic task).
+        Adds a consumer for the given ID. Typically, this is used to
+        monitor job completion (by adding a synthetic task).  Calls
+        task.notify_ref_table_updated if the ID is already consumable,
+        and otherwise relies on notify_task_of_reference() to do it
+        later.
         """
+        assert hasattr(consumer, "notify_ref_table_updated")
         try:
             ref_table_entry = self.get_reference_info(id)
             if ref_table_entry.ref.is_consumable():
@@ -154,7 +216,14 @@ class DynamicTaskGraph:
                 self.task_runnable(task)
     
     def reduce_graph_for_references(self, ref_ids):
-    
+        """
+        Start scheduling tasks with the ultimate aim of making ref_ids
+        available.
+        """
+        # XXX sos22 this is only ever invoked as
+        # reduce_graph_for_references(task.expected_outputs), which
+        # should perhaps be replaced with just
+        # reduce_graph_for_tasks([task])
         root_tasks = []
     
         # Initially, start with the root set of tasks, based on the desired
@@ -169,7 +238,18 @@ class DynamicTaskGraph:
         self.reduce_graph_for_tasks(root_tasks)
     
     def reduce_graph_for_tasks(self, root_tasks):
-        
+        """
+        Arrange that root_tasks will eventually run.  If its inputs
+        are available immediately then we run it immediately.
+        Otherwise, find the tasks which will produce the missing
+        inputs and recursively[1] kick them off, then register the
+        original task as a consumer of the new task in the reference
+        table so that it's started automatically as soon as its
+        inputs are available.
+
+        [1] Implementation isn't recursive, but that's semantically
+        what happens here.
+        """
         newly_active_task_queue = collections.deque()
             
         for task in root_tasks:

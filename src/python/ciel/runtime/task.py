@@ -42,7 +42,84 @@ for (name, number) in TASK_STATES.items():
     TASK_STATE_NAMES[number] = name
 
 class TaskPoolTask:
+    """
+    Interesting fields:
+
+    task_id -- the ID of the task
+    parent -- either None or the task which spawned us
+    children -- a list of tasks which we've spawned.  This is
+                maintained by DynamicTaskGraph::spawn() and
+                RecoveryManager::load_other_tasks_for_job, rather than
+                directly by this class.
+    handler -- a string which says which task handler to use.  This is
+               used by Job::assign_scheduling_class_to_task() to figure
+               out a default scheduling class and also
+               TaskExecutionRecord::run() to index into the big table of
+               executors.
+    inputs -- a dictionary from local reference IDs to references?  It
+              looks like this only gets filled out as the inputs
+              become available.
+    dependencies -- a slightly different dictionary from reference IDs to
+                    references?
+    expected_outputs -- a list of strings which says what references we expect this
+                        task to ultimately produce.
+    task_private -- I have no idea what this is, but it looks important
+    unfinished_input_streams -- a set of reference IDs which we're
+                                consuming in streaming mode.  Only really used
+                                so as we can go from QUEUED_STREAMING to
+                                just QUEUED when the last one becomes ready.
+                                Also updated by DynamicTaskGraph::reduce_graph_for_tasks().
+    constrained_location -- Either None or a netloc.  If it's a netloc then
+                            one of our inputs is a FixedRef which forces us
+                            to run on that netloc.
+    constrained_location_checked -- True iff constrained_location has been
+                                    calculated.  XXX SOS22: Not quite sure
+                                    why this is being done lazily; it's
+                                    not like it's a very expensive thing to
+                                    compute.
+    _blocking_dict -- a dictionary from global IDs to sets of local
+                      IDs.  The global IDs are the references which
+                      we're blocked on, and the local IDs are the
+                      matching IDs in the inputs dictionary.  When
+                      this goes empty the task becomes runnable.
+    history -- a list of two-tuples.  The first argument is a time,
+               and the second is either a description of the thing
+               which happened as a string or a two-tuple of the
+               description and some additional information.  Pulled
+               out by the task crawler as a debug aid; not otherwise
+               used.
+    job -- either the job this task is part of or an instance of DummyJob.
+           This class only uses it for logging, but lots of other places
+           make more sensible use of it.
+    taskset --
+    worker_private -- a string->string dictionary of information for the
+                      worker.  The only key is ``hint'', which is either
+                      ``small_task'' or not present at all.
+    type -- Either None or the task type as a string.  Only set from the initialiser,
+            only accessed by get_type().
+    worker -- None or a Worker.  Set when the task is assigned to a worker, but not
+              cleared when the task completes (unless the worker fails and we need
+              to migrate the task).
+    state -- None or a state identifier (i.e. an index into
+             TASK_STATE_NAMES).  This should only be changed by
+             set_state.
+    scheduling_class -- either \"cpu\" or \"disk\".  Used when considering scheduling
+                        tasks together so that we don't put lots of disk-heavy tasks
+                        on the same machine.
+    current_attempt -- the number of times that we've tried to run this task so
+                       far.  Maintained by the job pool rather than by the task
+                       itself.
+    profiling -- a dictionary from strings to timestamps, measured as seconds
+                 since the POSIX epoch.  The strings are descriptions of interesting
+                 events, and the timestamps are when they happened.  Events include
+                 at least CREATED, STARTED, and FINISHED.
+
+    There are a couple of less interesting fields, as well:
     
+    event_index -- 0
+    saved_continuation_uri -- None
+
+    """
     def __init__(self, task_id, parent_task, handler, inputs, dependencies, expected_outputs, task_private=None, state=TASK_CREATED, job=None, taskset=None, worker_private=None, workers=[], scheduling_class=None, type=None):
         self.task_id = task_id
         
@@ -102,6 +179,12 @@ class TaskPoolTask:
         self.state = state
         
     def record_event(self, description, time=None, additional=None):
+        """
+        Add an event to the debug history.  description should be a
+        string describing the event.  additional can be anything which
+        you think is interesting.  This gets interpreted in various
+        exciting ways by the task crawler.
+        """
         if time is None:
             time = datetime.datetime.now()
         if additional is not None:
@@ -147,14 +230,19 @@ class TaskPoolTask:
         self.worker = worker
 
     def unset_worker(self, worker):
+        # XXX SOS22 this might leave us in state ASSIGNED, which
+        # doesn't sound like a good idea.
         assert self.worker is worker
         self.worker = None
 
     def get_worker(self):
-        """Returns the worker to which this task is assigned."""
+        """Returns the worker to which this task is assigned, or None
+        if it doesn't have one."""
         return self.worker
 
     def block_on(self, global_id, local_id):
+        # Note that we might already be in state BLOCKING here, in which
+        # case we just add the new ID to the blocking set.
         self.set_state(TASK_BLOCKING)
         try:
             self._blocking_dict[global_id].add(local_id)
@@ -162,6 +250,7 @@ class TaskPoolTask:
             self._blocking_dict[global_id] = set([local_id])
             
     def notify_reference_changed(self, global_id, ref, task_pool):
+        # XXX SOS22 this doesn't appear to ever get called.
         if global_id in self.unfinished_input_streams:
             self.unfinished_input_streams.remove(global_id)
             task_pool.unsubscribe_task_from_ref(self, ref)
@@ -184,6 +273,9 @@ class TaskPoolTask:
                     self.set_state(TASK_RUNNABLE)
 
     def notify_ref_table_updated(self, ref_table_entry):
+        # Called by the task graph when a new input reference becomes
+        # consumable or when <something> happens to a streamable
+        # reference.
         global_id = ref_table_entry.ref.id
         ref = ref_table_entry.ref
         if global_id in self.unfinished_input_streams:
@@ -207,6 +299,19 @@ class TaskPoolTask:
                     self.set_state(TASK_RUNNABLE)
         
     def convert_dependencies_to_futures(self):
+        """Convert all of our input references to future references.
+        This is used if we've tried to run the task and found that at
+        least one of the inputs was unexpectedly unavailable, so we
+        just back off and try to fetch all of them again.  It would be
+        possible to be more cunning here and only convert the failed
+        inputs, but this is much easier, and we're a long way from the
+        fast path here."""
+        # XXX SOS22 this discards FixedReferences, which doesn't sound
+        # like a great idea (although we do want to discard the
+        # various netloc hints).
+        # Also, I'm not sure how this would interact with SWDataValue
+        # references; discarding the value probably isn't a great
+        # idea.
         new_deps = {}
         for local_id, ref in self.dependencies.items(): 
             new_deps[local_id] = ref.as_future()

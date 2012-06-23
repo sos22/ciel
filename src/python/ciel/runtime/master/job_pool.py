@@ -374,6 +374,7 @@ class Job:
         self.job_pool.deferred_worker.do_deferred(lambda: self._report_tasks(report, toplevel_task, worker))
 
     def _report_tasks(self, report, toplevel_task, worker):
+        # XXX SOS22 This does a damn sight more than just reporting the tasks!
         with self._lock:
     
             tx = TaskGraphUpdate()

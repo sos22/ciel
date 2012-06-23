@@ -17,12 +17,17 @@ import base64
 import re
 
 class SWRealReference:
-    
+    """
+    A Ciel reference, of any sort.  This has to be extended in order
+    to be useful.  In particular, every instance should have an id
+    field, and you really want to override as_tuple.
+    """
     def as_tuple(self):
-        pass
+        assert False
 
     def as_protobuf(self):
-        pass
+        """Decoy method -- never actually called"""
+        assert False
     
     def is_consumable(self):
         return True
@@ -30,12 +35,25 @@ class SWRealReference:
     def as_future(self):
         # XXX: Should really make id a field of RealReference.
         return SW2_FutureReference(self.id)
-    
+
 def protobuf_to_netloc(netloc):
+    # Doesn't appear to be called anywhere
     return '%s:%d' % (netloc.hostname, netloc.port)
 
 class SWErrorReference(SWRealReference):
-    
+    """x
+    References to the output of a task which failed.  This is either
+    because the task itself failed, in which case reason ==
+    \"RUNTIME_EXCEPTION\", or because the worker failed too many times
+    while we were trying to execute the task, in which case
+    reason == \"WORKER_FAILED\".
+
+    Fields:
+
+    id -- the id of the thing referenced
+    reason -- a string which is either RUNTIME_EXCEPTION or WORKER_FAILED
+    details -- Either None or TaskFailedError::message, which is usually a string.
+    """
     def __init__(self, id, reason, details):
         self.id = id
         self.reason = reason
@@ -49,6 +67,8 @@ class SW2_FutureReference(SWRealReference):
     Used as a reference to a task that hasn't completed yet. The identifier is in a
     system-global namespace, and may be passed to other tasks or returned from
     tasks.
+
+    Only interesting field is id.
     """
         
     def __init__(self, id):
@@ -70,7 +90,21 @@ class SW2_FutureReference(SWRealReference):
         return 'SW2_FutureReference(%s)' % (repr(self.id), )
         
 class SW2_ConcreteReference(SWRealReference):
-        
+    """
+    A reference to a data object something which actually exists,
+    either the result of a task which has finished or something
+    fetched from outside of the cluster.
+
+    Interesting fields:
+
+    id -- our id
+    size_hint -- either None or the size of the referenced file, in bytes
+    location_hints -- a set of netlocs of workers which are likely to contain the
+                      referenced object.  There's no guarantee that the
+                      hinted workers contain the object, or that there aren't
+                      other workers with a copy, but it's accurate often
+                      enough to be useful for optimisations.
+    """
     def __init__(self, id, size_hint=None, location_hints=None):
         self.id = id
         self.size_hint = size_hint
@@ -105,7 +139,15 @@ class SW2_ConcreteReference(SWRealReference):
         return 'SW2_ConcreteReference(%s, %s, %s)' % (repr(self.id), repr(self.size_hint), repr(self.location_hints))
 
 class SW2_SweetheartReference(SW2_ConcreteReference):
+    """
+    Like a concrete reference, but with a hint that it wants to stay
+    on a particular netloc if at all possible.
 
+    Interesting fields:
+    
+    <#include SW2_ConcreteReference>
+    sweetheart_netloc -- the netloc of the worker we want to stay on if possible
+    """
     def __init__(self, id, sweetheart_netloc, size_hint=None, location_hints=None):
         SW2_ConcreteReference.__init__(self, id, size_hint, location_hints)
         self.sweetheart_netloc = sweetheart_netloc
@@ -128,7 +170,7 @@ class SW2_SweetheartReference(SW2_ConcreteReference):
         return 'SW2_SweetheartReference(%s, %s, %s, %s)' % (repr(self.id), repr(self.sweetheart_netloc), repr(self.size_hint), repr(self.location_hints))
         
 class SW2_FixedReference(SWRealReference):
-    
+
     def __init__(self, id, fixed_netloc):
         self.id = id
         self.fixed_netloc = fixed_netloc
@@ -345,6 +387,8 @@ def combine_references(original, update):
     # Sweetheart reference over other non-vals; combine location hints if any available.
     if (isinstance(update, SW2_SweetheartReference)):
         if (isinstance(original, SW2_ConcreteReference)):
+            # XXX SOS22 why not call the combine_with() method of
+            # the sweetheart?  Why not do this for stream references?
             update.location_hints.update(original.location_hints)
         return update
 
