@@ -12,7 +12,7 @@
 # ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 from ciel.runtime.worker.upload_manager import UploadManager
-from ciel.runtime.master.deferred_work import DeferredWorkPlugin
+from ciel.runtime.deferred_work import DeferredWorkPlugin
 import ciel
 from ciel.runtime.worker.master_proxy import MasterProxy
 from ciel.runtime.task_executor import TaskExecutorPlugin

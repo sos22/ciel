@@ -14,7 +14,7 @@
 from __future__ import with_statement
 from ciel.runtime.block_store import BlockStore, get_own_netloc
 from ciel.runtime.lighttpd import LighttpdAdapter
-from ciel.runtime.master.deferred_work import DeferredWorkPlugin
+from ciel.runtime.deferred_work import DeferredWorkPlugin
 from ciel.runtime.master.hot_standby import BackupSender, \
     MasterRecoveryMonitor
 from ciel.runtime.master.job_pool import JobPool
