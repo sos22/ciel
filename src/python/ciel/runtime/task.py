@@ -114,11 +114,6 @@ class TaskPoolTask:
                  events, and the timestamps are when they happened.  Events include
                  at least CREATED, STARTED, and FINISHED.
 
-    There are a couple of less interesting fields, as well:
-    
-    event_index -- 0
-    saved_continuation_uri -- None
-
     """
     def __init__(self, task_id, parent_task, handler, inputs, dependencies, expected_outputs, task_private=None, state=TASK_CREATED, job=None, taskset=None, worker_private=None, workers=[], scheduling_class=None, type=None):
         self.task_id = task_id
@@ -161,9 +156,6 @@ class TaskPoolTask:
         #self.worker = None
         self.scheduling_class = scheduling_class
         
-        self.saved_continuation_uri = None
-
-        self.event_index = 0
         self.current_attempt = 0
         
         self.profiling = {}
@@ -311,7 +303,6 @@ class TaskPoolTask:
                       'handler': self.handler,
                       'expected_outputs': self.expected_outputs,
                       'inputs': self.inputs.values(),
-                      'event_index': self.event_index,
                       'job' : self.job.id}
         
         descriptor['parent'] = self.parent.task_id if self.parent is not None else None
